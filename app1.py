@@ -1,6 +1,6 @@
 """
 S.A.I.N.T. Enterprise — Unified Source-to-Pay Platform
-Supplier AI, RFP Pilot, Contract Lifecycle, & Spend Analytics Suite
+Supplier AI, RFP Pilot, Contract Lifecycle, Spend Analytics & SRM Suite
 """
 
 import streamlit as st
@@ -187,6 +187,7 @@ class Database:
     @staticmethod
     def initialize():
         conn = Database.get_connection()
+        # Supplier Risk Analyses Table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS analyses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,6 +197,16 @@ class Database:
                 analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, purge_after TIMESTAMP
             )
         """)
+        # Managed Suppliers Table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE, category TEXT NOT NULL,
+                contact_email TEXT, rating TEXT, status TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Contracts Table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS contracts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,6 +215,7 @@ class Database:
                 file_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Spend Analytics Table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS spend_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,8 +225,22 @@ class Database:
         """)
         conn.commit()
         
-        check = conn.execute("SELECT COUNT(*) as count FROM spend_records").fetchone()
-        if check["count"] == 0:
+        # Seed Initial Suppliers if empty
+        check_sup = conn.execute("SELECT COUNT(*) as count FROM suppliers").fetchone()
+        if check_sup["count"] == 0:
+            mock_suppliers = [
+                ("Cloudvita IT Consulting", "Professional Services", "contact@cloudvita.com", "4.8/5.0", "Active"),
+                ("Acme Infrastructure", "IT Hardware", "sales@acmeinfra.com", "4.5/5.0", "Active"),
+                ("Global Logistics Corp", "Supply Chain", "support@globallogistics.com", "3.9/5.0", "Under Review"),
+                ("Apple", "Consumer Electronics", "enterprise@apple.com", "4.9/5.0", "Active"),
+                ("Microsoft", "Cloud & Software", "enterprise@microsoft.com", "4.9/5.0", "Active")
+            ]
+            conn.executemany("INSERT OR IGNORE INTO suppliers (name, category, contact_email, rating, status) VALUES (?,?,?,?,?)", mock_suppliers)
+            conn.commit()
+
+        # Seed Mock Spend Data if empty
+        check_spend = conn.execute("SELECT COUNT(*) as count FROM spend_records").fetchone()
+        if check_spend["count"] == 0:
             mock_spend = [
                 ("Acme Corp", "IT Infrastructure", 1250000.0, "2026-01-15", "Technology"),
                 ("Global Logistics", "Supply Chain", 850000.0, "2026-02-01", "Operations"),
@@ -228,6 +254,23 @@ class Database:
             conn.commit()
             
         conn.close()
+
+    @staticmethod
+    def save_supplier(name, category, email, rating, status):
+        conn = Database.get_connection()
+        conn.execute("""
+            INSERT OR REPLACE INTO suppliers (name, category, contact_email, rating, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (name, category, email, rating, status))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def get_suppliers():
+        conn = Database.get_connection()
+        rows = conn.execute("SELECT * FROM suppliers ORDER BY name ASC").fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
     @staticmethod
     def save_analysis(vendor, score, risk_label, confidence, wri, summary, full_report, graph_data, sources=None, verified_financials=None):
@@ -353,7 +396,6 @@ class AIEngine:
 
     def generate_report(self, vendor: str, context: str) -> list:
         if not self.mistral or not self.deepseek:
-            # Fallback mock report if live API keys are not supplied in env
             return [
                 f"S.A.I.N.T. Executive Summary for {vendor}: Risk profile assessed based on available market indicators.",
                 "Market & Geopolitical Trends: Stable regional performance with low geopolitical volatility.",
@@ -387,17 +429,22 @@ def main():
         "CORE MODULES",
         [
             "1️⃣ Supplier AI & Risk Tracker",
-            "2️⃣ RFP Pilot Suite",
-            "3️⃣ Contract Lifecycle (CLM)",
-            "4️⃣ Spend Analytics Dashboard"
+            "2️⃣ Supplier Directory & Management",
+            "3️⃣ RFP Pilot Suite",
+            "4️⃣ Contract Lifecycle (CLM)",
+            "5️⃣ Spend Analytics Dashboard"
         ]
     )
 
     st.sidebar.markdown("---")
     st.sidebar.caption("System Status: Operational")
 
+    # Fetch database suppliers globally for cross-module reuse
+    db_suppliers = Database.get_suppliers()
+    db_sup_names = [s["name"] for s in db_suppliers] if db_suppliers else []
+
     # ---------------------------------------------------------
-    # MODULE 1: SUPPLIER AI & INTELLIGENCE TRACKER
+    # MODULE 1: SUPPLIER AI & RISK TRACKER
     # ---------------------------------------------------------
     if "1️⃣" in selected_module:
         st.markdown("""
@@ -407,34 +454,46 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        col_in, col_btn = st.columns([4, 1])
-        with col_in:
-            vendor_input = st.text_input("Target Supplier Name / Ticker", placeholder="e.g. Apple, Microsoft, Caterpillar...")
-        with col_btn:
-            st.markdown("<br>", unsafe_allow_html=True)
-            run_analysis = st.button("⚡ Run Risk Analysis", type="primary", use_container_width=True)
+        supplier_options = ["-- Enter New Free-Text Supplier --"] + db_sup_names
 
-        if run_analysis and vendor_input.strip():
-            with st.status("Gathering Intelligence & Running Dual-LLM Audit...", expanded=True) as status:
-                try:
-                    packet = CompanyIntelligence.gather(vendor_input.strip())
-                    for n in packet["notes"]: st.write(n)
-                    
-                    engine = AIEngine()
-                    parts = engine.generate_report(vendor_input.strip(), packet["prompt_context"])
-                    
-                    wri = {"financial": 75, "geopolitical": 65, "compliance": 80, "innovation": 70, "market": 70, "confidence": 82}
-                    score = 73.5
-                    label = "MODERATE RISK"
-                    
-                    Database.save_analysis(vendor_input.strip(), score, label, 82, wri, parts[0], parts, [70, 75, 80], packet["sources"])
-                    status.update(label="Analysis Complete & Saved to Database!", state="complete")
-                    
-                    st.success(f"Analysis successfully generated for {vendor_input.strip()}!")
-                    st.markdown(f"### Executive Summary\n<div class='summary-box'>{parts[0]}</div>", unsafe_allow_html=True)
-                except Exception as exc:
-                    status.update(label="Analysis Failed", state="error")
-                    st.error(f"Error during execution: {exc}")
+        col_sel, col_free = st.columns(2)
+        with col_sel:
+            selected_vendor_dropdown = st.selectbox("Select Managed Supplier from Database", supplier_options)
+        with col_free:
+            free_text_vendor = st.text_input("Or Enter Custom Supplier / Ticker", placeholder="e.g. Caterpillar, Tesla, NVDA...")
+
+        target_vendor = ""
+        if free_text_vendor.strip():
+            target_vendor = free_text_vendor.strip()
+        elif selected_vendor_dropdown != "-- Enter New Free-Text Supplier --":
+            target_vendor = selected_vendor_dropdown
+
+        run_analysis = st.button("⚡ Run Risk Analysis", type="primary", use_container_width=True)
+
+        if run_analysis:
+            if not target_vendor:
+                st.warning("Please select a supplier from the dropdown OR type a custom vendor name.")
+            else:
+                with st.status(f"Gathering Intelligence & Running Dual-LLM Audit for {target_vendor}...", expanded=True) as status:
+                    try:
+                        packet = CompanyIntelligence.gather(target_vendor)
+                        for n in packet["notes"]: st.write(n)
+                        
+                        engine = AIEngine()
+                        parts = engine.generate_report(target_vendor, packet["prompt_context"])
+                        
+                        wri = {"financial": 75, "geopolitical": 65, "compliance": 80, "innovation": 70, "market": 70, "confidence": 82}
+                        score = 73.5
+                        label = "MODERATE RISK"
+                        
+                        Database.save_analysis(target_vendor, score, label, 82, wri, parts[0], parts, [70, 75, 80], packet["sources"])
+                        status.update(label="Analysis Complete & Saved to Database!", state="complete")
+                        
+                        st.success(f"Analysis successfully generated for {target_vendor}!")
+                        st.markdown(f"### Executive Summary\n<div class='summary-box'>{parts[0]}</div>", unsafe_allow_html=True)
+                    except Exception as exc:
+                        status.update(label="Analysis Failed", state="error")
+                        st.error(f"Error during execution: {exc}")
 
         st.markdown("---")
         st.subheader("📚 Recent Analysis Records")
@@ -444,9 +503,47 @@ def main():
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
     # ---------------------------------------------------------
-    # MODULE 2: RFP PILOT SUITE
+    # MODULE 2: SUPPLIER DIRECTORY & MANAGEMENT
     # ---------------------------------------------------------
     elif "2️⃣" in selected_module:
+        st.markdown("""
+        <div class="saint-header">
+            <h1>Supplier Directory & Management</h1>
+            <p>Onboard, Database-Register & Monitor Enterprise Vendors</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_add, col_list = st.columns([2, 3])
+
+        with col_add:
+            st.subheader("➕ Register New Supplier")
+            sup_name = st.text_input("Supplier Business Name", placeholder="e.g. Cloudvita IT Consulting")
+            sup_cat = st.selectbox("Category", ["IT Hardware", "Software & Cloud", "Professional Services", "Supply Chain", "Facilities", "Other"])
+            sup_email = st.text_input("Contact Email", placeholder="vendor@company.com")
+            sup_rating = st.select_slider("Initial Score / Rating", options=["1.0/5.0", "2.0/5.0", "3.0/5.0", "4.0/5.0", "4.5/5.0", "4.8/5.0", "5.0/5.0"], value="4.5/5.0")
+            sup_status = st.selectbox("Status", ["Active", "Under Review", "Preferred", "Blacklisted"])
+
+            if st.button("💾 Save Supplier to Database", type="primary"):
+                if sup_name.strip():
+                    Database.save_supplier(sup_name.strip(), sup_cat, sup_email, sup_rating, sup_status)
+                    st.success(f"Supplier '{sup_name.strip()}' saved! It can now be selected across all modules.")
+                    st.rerun()
+                else:
+                    st.error("Supplier Name is required.")
+
+        with col_list:
+            st.subheader("🏢 Managed Suppliers Database")
+            suppliers = Database.get_suppliers()
+            if suppliers:
+                df_sup = pd.DataFrame(suppliers)
+                st.dataframe(df_sup[["name", "category", "contact_email", "rating", "status", "created_at"]], use_container_width=True, hide_index=True)
+            else:
+                st.info("No suppliers registered yet.")
+
+    # ---------------------------------------------------------
+    # MODULE 3: RFP PILOT SUITE
+    # ---------------------------------------------------------
+    elif "3️⃣" in selected_module:
         st.markdown("""
         <div class="saint-header">
             <h1>RFP Pilot Suite</h1>
@@ -454,38 +551,60 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        rfp_tab1, rfp_tab2, rfp_tab3 = st.tabs(["📋 Vendor Directory", "⚡ RFP Builder", "📊 Response Scoring"])
+        rfp_tab1, rfp_tab2, rfp_tab3 = st.tabs(["📋 Vendor Directory Network", "⚡ RFP Builder & Dispatch", "📊 Response Scoring"])
 
         with rfp_tab1:
             st.subheader("Approved Vendor Network")
-            vendors_data = [
-                {"Vendor Name": "Cloudvita IT Consulting", "Category": "Professional Services", "Rating": "4.8/5.0", "Status": "Active"},
-                {"Vendor Name": "Acme Infrastructure", "Category": "IT Hardware", "Rating": "4.5/5.0", "Status": "Active"},
-                {"Vendor Name": "Global Logistics Corp", "Category": "Supply Chain", "Rating": "3.9/5.0", "Status": "Under Review"}
-            ]
-            st.dataframe(pd.DataFrame(vendors_data), use_container_width=True)
+            if db_suppliers:
+                df_rfp_sup = pd.DataFrame(db_suppliers)
+                st.dataframe(df_rfp_sup[["name", "category", "contact_email", "rating", "status"]], use_container_width=True, hide_index=True)
+            else:
+                st.info("No suppliers found. Add suppliers in Module 2 (Supplier Directory & Management).")
 
         with rfp_tab2:
             st.subheader("Create & Dispatch New RFP")
             rfp_title = st.text_input("RFP Title", "Enterprise Cloud Migration & Managed Services")
-            rfp_cat = st.selectbox("Category", ["IT Services", "Hardware", "Consulting", "Logistics"])
+            
+            rfp_cat = st.selectbox("Category", ["IT Hardware", "Software & Cloud", "Professional Services", "Supply Chain", "Facilities", "Other"])
             rfp_budget = st.number_input("Estimated Budget ($)", value=500000)
+            
+            st.markdown("#### Select Target Vendors for Dispatch")
+            
+            col_target_type, col_vendor_select = st.columns([1, 2])
+            with col_target_type:
+                target_mode = st.radio("Target Selection Strategy", ["Select Specific Suppliers", "All Suppliers in Category"])
+            
+            selected_rfp_vendors = []
+            with col_vendor_select:
+                if target_mode == "Select Specific Suppliers":
+                    selected_rfp_vendors = st.multiselect("Pick Suppliers from Database", db_sup_names, default=db_sup_names[:2] if len(db_sup_names) >= 2 else db_sup_names)
+                else:
+                    cat_matched_vendors = [s["name"] for s in db_suppliers if s["category"] == rfp_cat] if db_suppliers else []
+                    st.info(f"RFP will be automatically dispatched to all **{len(cat_matched_vendors)}** registered suppliers in category: **{rfp_cat}**")
+                    selected_rfp_vendors = cat_matched_vendors
+
             rfp_specs = st.text_area("Scope of Work & Requirements", "Provide multi-cloud orchestration, 24/7 support, and SOC2 compliance.")
             
-            if st.button("🚀 Generate & Dispatch RFP"):
-                st.success(f"RFP '{rfp_title}' created and dispatched to eligible vendors in {rfp_cat}!")
+            if st.button("🚀 Generate & Dispatch RFP", type="primary"):
+                if not selected_rfp_vendors:
+                    st.warning("Please select at least one vendor to dispatch the RFP.")
+                else:
+                    vendor_list_str = ", ".join(selected_rfp_vendors)
+                    st.success(f"RFP '{rfp_title}' created and successfully dispatched to: **{vendor_list_str}**!")
 
         with rfp_tab3:
             st.subheader("Automated Bid Evaluation Engine")
             st.info("Upload vendor proposal responses to run dual-model rubric matching.")
+            
+            eval_vendor = st.selectbox("Select Bidding Vendor", db_sup_names if db_sup_names else ["Custom Vendor"])
             uploaded_file = st.file_uploader("Upload Vendor Proposal (PDF/TXT)", type=["txt", "pdf"])
             if uploaded_file:
-                st.success("Proposal ingested. Dual-model alignment score: **88/100 (Strong Match)**")
+                st.success(f"Proposal for **{eval_vendor}** ingested. Dual-model alignment score: **88/100 (Strong Match)**")
 
     # ---------------------------------------------------------
-    # MODULE 3: CONTRACT LIFECYCLE MANAGEMENT (CLM)
+    # MODULE 4: CONTRACT LIFECYCLE MANAGEMENT (CLM)
     # ---------------------------------------------------------
-    elif "3️⃣" in selected_module:
+    elif "4️⃣" in selected_module:
         st.markdown("""
         <div class="saint-header">
             <h1>Contract Lifecycle Management (CLM)</h1>
@@ -498,17 +617,35 @@ def main():
         with clm_col1:
             st.subheader("📄 Register New Contract")
             c_title = st.text_input("Contract Name / Ref", placeholder="e.g. Master Services Agreement 2026")
-            c_vendor = st.text_input("Supplier / Partner", placeholder="e.g. Cloudvita IT")
+            
+            # Integrated Supplier Selection Strategy
+            st.markdown("#### Select Contracting Supplier")
+            clm_sup_options = ["Pick Registered Supplier from Database", "Enter New / Unregistered Vendor"]
+            clm_mode = st.radio("Supplier Mode", clm_sup_options, horizontal=True)
+
+            c_vendor = ""
+            if clm_mode == "Pick Registered Supplier from Database":
+                if db_sup_names:
+                    c_vendor = st.selectbox("Registered Supplier Database", db_sup_names)
+                else:
+                    st.warning("No managed suppliers found. Add suppliers in Module 2 or switch to free-text mode below.")
+                    c_vendor = st.text_input("Type Vendor Name", placeholder="e.g. Cloudvita IT Consulting")
+            else:
+                c_vendor = st.text_input("Type Vendor Name", placeholder="e.g. Cloudvita IT Consulting")
+
             c_value = st.number_input("Total Contract Value ($)", value=250000.0)
             c_eff = st.date_input("Effective Date", datetime.date.today())
             c_exp = st.date_input("Expiration Date", datetime.date.today() + datetime.timedelta(days=365))
             c_status = st.selectbox("Status", ["Active", "Under Review", "Pending Renewal", "Terminated"])
             c_file = st.file_uploader("Attach Executed Document", type=["pdf", "docx"])
 
-            if st.button("💾 Save Contract"):
-                file_name = c_file.name if c_file else "No File Attached"
-                Database.save_contract(c_title, c_vendor, c_value, c_eff.isoformat(), c_exp.isoformat(), c_status, file_name)
-                st.success(f"Contract '{c_title}' saved successfully!")
+            if st.button("💾 Save Contract", type="primary"):
+                if not c_vendor.strip():
+                    st.error("Please specify a supplier for this contract.")
+                else:
+                    file_name = c_file.name if c_file else "No File Attached"
+                    Database.save_contract(c_title, c_vendor.strip(), c_value, c_eff.isoformat(), c_exp.isoformat(), c_status, file_name)
+                    st.success(f"Contract '{c_title}' saved successfully for supplier **{c_vendor.strip()}**!")
 
         with clm_col2:
             st.subheader("📑 Active Contract Repository")
@@ -521,9 +658,9 @@ def main():
                 st.info("No contracts registered yet. Use the form on the left to add one.")
 
     # ---------------------------------------------------------
-    # MODULE 4: SPEND ANALYTICS DASHBOARD
+    # MODULE 5: SPEND ANALYTICS DASHBOARD
     # ---------------------------------------------------------
-    elif "4️⃣" in selected_module:
+    elif "5️⃣" in selected_module:
         st.markdown("""
         <div class="saint-header">
             <h1>Autonomous Spend Analytics</h1>
