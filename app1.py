@@ -12,6 +12,25 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+class Config:
+    MISTRAL_API_KEY  = os.getenv("MISTRAL_API_KEY", "")
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+    FMP_API_KEY      = os.getenv("FMP_API_KEY", "")
+    TAVILY_API_KEY   = os.getenv("TAVILY_API_KEY", "")
+    MISTRAL_MODEL    = "mistral-small-latest"
+    DEEPSEEK_MODEL   = "deepseek-chat"
+    REQUEST_TIMEOUT  = 10
+    DB_PATH          = os.path.expanduser("~/saint_data.db")
+    PURGE_MONTHS     = 12
+    SEC_USER_AGENT   = os.getenv("SEC_USER_AGENT", "SAINT-Procurement-Platform/3.0 (contact@saint-ai.com)")
+
+    WRI_WEIGHTS = {
+        "financial": 0.30, "geopolitical": 0.20, "compliance": 0.20, "innovation": 0.15, "market": 0.15
+    }
+    WRI_LABELS = {
+        "financial": "Financial Stability (30%)", "geopolitical": "Geopolitical Risk (20%)",
+        "compliance": "Compliance & ESG (20%)", "innovation": "Innovation (15%)", "market": "Market Position (15%)"
+    }
 class Database:
     @staticmethod
     def get_connection():
