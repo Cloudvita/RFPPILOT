@@ -1,3 +1,17 @@
+import streamlit as st
+import sqlite3
+import os
+import json
+import datetime
+import requests
+import pandas as pd
+import matplotlib.pyplot as plt
+st.set_page_config(
+    page_title="S.A.I.N.T. | Enterprise Procurement Suite",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 # =============================================================
 # DUAL-MODEL AI ENGINE
 # =============================================================
