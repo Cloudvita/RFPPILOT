@@ -12,6 +12,109 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+class Database:
+    @staticmethod
+    def get_connection():
+        conn = sqlite3.connect(Config.DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
+
+    @staticmethod
+    def initialize():
+        conn = Database.get_connection()
+        # Supplier Risk Analyses Table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS analyses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vendor TEXT NOT NULL, score REAL, risk_label TEXT, confidence INTEGER,
+                wri_json TEXT, summary TEXT, full_report TEXT, graph_data TEXT,
+                sources_json TEXT, verified_financials_json TEXT,
+                analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, purge_after TIMESTAMP
+            )
+        """)
+        # Contracts Table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS contracts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL, vendor TEXT NOT NULL, contract_value REAL,
+                effective_date TEXT, expiration_date TEXT, status TEXT,
+                file_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Spend Analytics Table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS spend_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vendor TEXT NOT NULL, category TEXT NOT NULL, amount REAL,
+                spend_date TEXT, business_unit TEXT
+            )
+        """)
+        conn.commit()
+        
+        # Seed Mock Spend Data if empty
+        check = conn.execute("SELECT COUNT(*) as count FROM spend_records").fetchone()
+        if check["count"] == 0:
+            mock_spend = [
+                ("Acme Corp", "IT Infrastructure", 1250000.0, "2026-01-15", "Technology"),
+                ("Global Logistics", "Supply Chain", 850000.0, "2026-02-01", "Operations"),
+                ("Cloudvita Consulting", "Professional Services", 450000.0, "2026-02-10", "Corporate"),
+                ("TechSupplies Inc", "Hardware", 120000.0, "2026-02-28", "Technology"),
+                ("Apex Office", "Facilities", 35000.0, "2026-03-01", "Admin"),
+                ("Acme Corp", "Cloud Hosting", 650000.0, "2026-03-05", "Technology"),
+                ("Beta Soft", "Software Licensing", 280000.0, "2026-03-12", "Technology")
+            ]
+            conn.executemany("INSERT INTO spend_records (vendor, category, amount, spend_date, business_unit) VALUES (?,?,?,?,?)", mock_spend)
+            conn.commit()
+            
+        conn.close()
+
+    @staticmethod
+    def save_analysis(vendor, score, risk_label, confidence, wri, summary, full_report, graph_data, sources=None, verified_financials=None):
+        purge_after = datetime.datetime.now() + datetime.timedelta(days=Config.PURGE_MONTHS * 30)
+        conn = Database.get_connection()
+        conn.execute("""
+            INSERT INTO analyses (vendor, score, risk_label, confidence, wri_json, summary, full_report, graph_data, sources_json, verified_financials_json, purge_after)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (vendor, score, risk_label, confidence, json.dumps(wri), summary, json.dumps(full_report), json.dumps(graph_data), json.dumps(sources or []), json.dumps(verified_financials or {}), purge_after.isoformat()))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def save_contract(title, vendor, value, eff_date, exp_date, status, file_name):
+        conn = Database.get_connection()
+        conn.execute("""
+            INSERT INTO contracts (title, vendor, contract_value, effective_date, expiration_date, status, file_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (title, vendor, value, eff_date, exp_date, status, file_name))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def get_history(search_term="", limit=50):
+        conn = Database.get_connection()
+        query = "SELECT id, vendor, score, risk_label, confidence, analyzed_at, purge_after FROM analyses WHERE vendor LIKE ? ORDER BY analyzed_at DESC LIMIT ?"
+        rows = conn.execute(query, (f"%{search_term}%", limit)).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_contracts():
+        conn = Database.get_connection()
+        rows = conn.execute("SELECT * FROM contracts ORDER BY created_at DESC").fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_spend():
+        conn = Database.get_connection()
+        rows = conn.execute("SELECT * FROM spend_records ORDER BY spend_date DESC").fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+# Initialize Database on launch
+Database.initialize()
 # =============================================================
 # DUAL-MODEL AI ENGINE
 # =============================================================
