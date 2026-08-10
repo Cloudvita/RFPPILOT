@@ -90,7 +90,8 @@ class Database:
     @staticmethod
     def initialize():
         conn = Database.get_connection()
-        # 1. Suppliers Table
+        
+        # 1. Ensure Table Structure Exists
         conn.execute("""
             CREATE TABLE IF NOT EXISTS suppliers (
                 supplier_id TEXT PRIMARY KEY,
@@ -108,7 +109,29 @@ class Database:
                 last_scanned TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # 2. RFPs Table
+
+        # Migration Guard: Add missing columns if database was initialized with old schema
+        cursor = conn.execute("PRAGMA table_info(suppliers)")
+        existing_cols = [col["name"] for col in cursor.fetchall()]
+        
+        if "poc" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN poc TEXT")
+        if "tax_id" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN tax_id TEXT")
+        if "address" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN address TEXT")
+        if "city" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN city TEXT")
+        if "country" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN country TEXT")
+        if "phone" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN phone TEXT")
+        if "market_updates" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN market_updates TEXT DEFAULT 'No recent updates logged.'")
+        if "last_scanned" not in existing_cols:
+            conn.execute("ALTER TABLE suppliers ADD COLUMN last_scanned TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+        # 2. Other S2P Tables
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rfps (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,7 +146,6 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # 3. RFP Responses Table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rfp_responses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,7 +157,6 @@ class Database:
                 submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # 4. Contracts Table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS contracts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,7 +176,6 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # 5. Spend Records Table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS spend_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,15 +188,20 @@ class Database:
         """)
         conn.commit()
 
-        # Seed initial data if empty
+        # 3. Seed initial data using EXPLICIT column mapping
         if conn.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0] == 0:
             mock_sups = [
                 ("SUP-101", "Cloudvita IT Consulting", "Jyothi Mandali", "EIN-8829102", "100 Innovation Way", "Irvine", "USA", "contact@cloudvita.com", "+1-949-555-0192", "Professional Services", "Active", "Stable market posture; expanding cloud practice."),
                 ("SUP-102", "Acme Infrastructure", "John Doe", "EIN-1102938", "500 Tech Blvd", "Austin", "USA", "sales@acmeinfra.com", "+1-512-555-0144", "IT Hardware", "Active", "Supply chain bottleneck reported in Q2."),
                 ("SUP-103", "Global Logistics Corp", "Sarah Smith", "EIN-9920192", "200 Harbor Dr", "Seattle", "USA", "support@globallogistics.com", "+1-206-555-0188", "Supply Chain", "Active", "New labor agreement signed; low risk.")
             ]
-            conn.executemany("INSERT OR IGNORE INTO suppliers VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", mock_sups)
+            conn.executemany("""
+                INSERT OR IGNORE INTO suppliers 
+                (supplier_id, name, poc, tax_id, address, city, country, email, phone, category, status, market_updates)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, mock_sups)
 
+        if conn.execute("SELECT COUNT(*) FROM spend_records").fetchone()[0] == 0:
             conn.executemany("INSERT INTO spend_records (supplier_name, category, amount, spend_date, business_unit) VALUES (?,?,?,?,?)", [
                 ("Cloudvita IT Consulting", "Professional Services", 450000.0, "2026-02-10", "Corporate"),
                 ("Acme Infrastructure", "IT Hardware", 1250000.0, "2026-01-15", "Technology"),
@@ -184,6 +209,7 @@ class Database:
                 ("Uncontracted Tech Vendor", "Software", 180000.0, "2026-03-01", "Marketing")
             ])
             conn.commit()
+            
         conn.close()
 
     @staticmethod
