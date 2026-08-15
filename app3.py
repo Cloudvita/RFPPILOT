@@ -351,38 +351,84 @@ def main():
         with m1:
             st.markdown("#### Register Supplier with W-9 Automated Verification")
             
-            # Requirement 5: Unique primary key supplier ID auto-populated
-            default_sup_id = f"SUP-{uuid.uuid4().hex[:6].upper()}"
+            # --- Initialize Session State for Auto-Fill ---
+            if "w9_autofill" not in st.session_state:
+                st.session_state.w9_autofill = {
+                    "supplier_id": f"SUP-{uuid.uuid4().hex[:6].upper()}",
+                    "name": "",
+                    "tax_id": "",
+                    "address": "",
+                    "city": "",
+                    "country": "USA",
+                    "company_type": "Private",
+                    "parsed_json": None,
+                    "w9_uploaded": 0
+                }
 
-            with st.form("supplier_form", clear_on_submit=True):
+            # --- 1. W-9 UPLOADER & PARSER (Placed before/outside form to trigger auto-fill) ---
+            st.markdown("##### 📄 Step 1: Upload W-9 Document (Auto-Fills Form Below)")
+            w9_file = st.file_uploader("Upload Filled-in W-9 (PDF)", type=["pdf"], key="w9_uploader_widget")
+            
+            if w9_file is not None and st.session_state.w9_autofill.get("last_uploaded_file") != w9_file.name:
+                parsed_w9_info, _ = parse_uploaded_w9(w9_file)
+                
+                # Update Session State values
+                st.session_state.w9_autofill["name"] = parsed_w9_info.get("name", "")
+                st.session_state.w9_autofill["tax_id"] = parsed_w9_info.get("tin", "")
+                st.session_state.w9_autofill["address"] = parsed_w9_info.get("address", "")
+                
+                # Split city/state if available
+                city_raw = parsed_w9_info.get("city_state_zip", "")
+                st.session_state.w9_autofill["city"] = city_raw.split(",")[0] if "," in city_raw else city_raw
+                st.session_state.w9_autofill["parsed_json"] = parsed_w9_info
+                st.session_state.w9_autofill["w9_uploaded"] = 1
+                st.session_state.w9_autofill["last_uploaded_file"] = w9_file.name
+                
+                st.success(f"✅ W-9 Extracted: **{parsed_w9_info['name']}** ({parsed_w9_info['tin']}). Form fields auto-populated below!")
+                st.rerun()
+
+            st.markdown("---")
+            st.markdown("##### 📝 Step 2: Review, Edit & Save Supplier Record")
+
+            # --- 2. THE INTAKE FORM (Auto-populated with session values) ---
+            with st.form("supplier_form", clear_on_submit=False):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    s_id = st.text_input("Supplier ID * (Auto-Generated Primary Key)", value=default_sup_id, disabled=True)
-                    s_name = st.text_input("Supplier Business Name *")
-                    # Requirement 1: Checkbox/Radio to choose Public or Private Company
-                    s_company_type = st.radio("Company Type *", ["Private", "Public"], horizontal=True)
+                    s_id = st.text_input(
+                        "Supplier ID * (Auto-Generated)", 
+                        value=st.session_state.w9_autofill["supplier_id"], 
+                        disabled=True
+                    )
+                    s_name = st.text_input(
+                        "Supplier Business Name *", 
+                        value=st.session_state.w9_autofill["name"]
+                    )
+                    company_type_idx = 1 if st.session_state.w9_autofill["company_type"] == "Public" else 0
+                    s_company_type = st.radio("Company Type *", ["Private", "Public"], index=company_type_idx, horizontal=True)
                     s_poc = st.text_input("Point of Contact (POC)")
                     s_cat = st.selectbox("Category", ["IT Hardware", "Software & Cloud", "Professional Services", "Supply Chain", "Facilities", "Other"])
+                    
                 with c2:
-                    s_tax = st.text_input("Tax ID / EIN / SSN")
+                    s_tax = st.text_input(
+                        "Tax ID / EIN / SSN", 
+                        value=st.session_state.w9_autofill["tax_id"]
+                    )
                     s_email = st.text_input("Contact Email")
                     s_phone = st.text_input("Contact Phone")
+                    
                 with c3:
-                    s_address = st.text_input("Street Address / Location")
-                    s_city = st.text_input("City")
-                    s_country = st.text_input("Country", value="USA")
+                    s_address = st.text_input(
+                        "Street Address / Location", 
+                        value=st.session_state.w9_autofill["address"]
+                    )
+                    s_city = st.text_input(
+                        "City", 
+                        value=st.session_state.w9_autofill["city"]
+                    )
+                    s_country = st.text_input("Country", value=st.session_state.w9_autofill["country"])
 
                 st.markdown("---")
-                st.markdown("##### 📄 W-9 Tax Document Upload & Automated Parsing (Requirement 2 & 3)")
-                w9_file = st.file_uploader("Upload Filled-in W-9 (PDF)", type=["pdf"])
-                
-                parsed_w9_info = None
-                if w9_file is not None:
-                    parsed_w9_info, _ = parse_uploaded_w9(w9_file)
-                    st.success(f"W-9 successfully parsed for: **{parsed_w9_info['name']}** (EIN/SSN: {parsed_w9_info['tin']})")
-
-                # Requirement 3: Option to choose and add sample notes
-                st.markdown("##### 📝 Compliance & Audit Notes Selection")
+                st.markdown("##### 📋 Compliance & Audit Notes Selection")
                 predefined_notes = [
                     "Verified W-9 against IRS records - Match",
                     "W-9 signature verified and approved",
@@ -399,18 +445,31 @@ def main():
 
                 if submit_sup:
                     if s_name:
-                        w9_json_str = json.dumps(parsed_w9_info) if parsed_w9_info else json.dumps({"status": "Manual Entry"})
-                        w9_flag = 1 if parsed_w9_info else 0
+                        w9_json_str = json.dumps(st.session_state.w9_autofill["parsed_json"]) if st.session_state.w9_autofill["parsed_json"] else json.dumps({"status": "Manual Entry"})
+                        w9_flag = st.session_state.w9_autofill["w9_uploaded"]
                         
                         Database.query("""
                             INSERT OR REPLACE INTO suppliers 
                             (supplier_id, name, company_type, poc, tax_id, address, city, country, email, phone, category, w9_uploaded, w9_data, sample_notes)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (default_sup_id, s_name, s_company_type, s_poc, s_tax or (parsed_w9_info.get("tin") if parsed_w9_info else ""), 
-                              s_address or (parsed_w9_info.get("address") if parsed_w9_info else ""), 
-                              s_city or "Irvine", s_country, s_email, s_phone, s_cat, w9_flag, w9_json_str, final_notes))
+                        """, (st.session_state.w9_autofill["supplier_id"], s_name, s_company_type, s_poc, s_tax, 
+                              s_address, s_city, s_country, s_email, s_phone, s_cat, w9_flag, w9_json_str, final_notes))
                         
-                        st.success(f"Supplier '{s_name}' ({default_sup_id}) successfully registered with W-9 and audit notes!")
+                        st.success(f"Supplier '{s_name}' ({st.session_state.w9_autofill['supplier_id']}) successfully registered!")
+                        
+                        # Reset autofill state for the next entry
+                        st.session_state.w9_autofill = {
+                            "supplier_id": f"SUP-{uuid.uuid4().hex[:6].upper()}",
+                            "name": "",
+                            "tax_id": "",
+                            "address": "",
+                            "city": "",
+                            "country": "USA",
+                            "company_type": "Private",
+                            "parsed_json": None,
+                            "w9_uploaded": 0,
+                            "last_uploaded_file": None
+                        }
                         st.rerun()
                     else:
                         st.error("Supplier Business Name is a required field.")
